@@ -6,6 +6,7 @@
 #include <limits>
 #include <cstdint>
 #include <fstream>
+#include <omp.h>
 
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
@@ -25,7 +26,186 @@ constexpr bool enableValidationLayers = false;
 constexpr bool enableValidationLayers = true;
 #endif
 
+// N body
 
+#include "simulation.h"
+
+#define NBODIES 50000
+
+struct Particle {
+    float position[3];
+    float velocity[3];
+    float mass;
+};
+
+class NBSim 
+{
+	public:
+		static vk::VertexInputBindingDescription getBindingDescription() {
+			vk::VertexInputBindingDescription bindingDescription{};
+			bindingDescription.binding = 0;
+			bindingDescription.stride = sizeof(Particle);
+			bindingDescription.inputRate = vk::VertexInputRate::eVertex;
+			return bindingDescription;
+		};
+
+		static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
+			std::array<vk::VertexInputAttributeDescription, 3> attributeDescriptions{};
+
+			// Position
+			attributeDescriptions[0].binding = 0;
+			attributeDescriptions[0].location = 0; // Maps to POSITION in Slang
+			attributeDescriptions[0].format = vk::Format::eR32G32B32Sfloat; // float3
+			attributeDescriptions[0].offset = offsetof(Particle, position);
+
+			// Velocity
+			attributeDescriptions[1].binding = 0;
+			attributeDescriptions[1].location = 1; // Maps to VELOCITY in Slang
+			attributeDescriptions[1].format = vk::Format::eR32G32B32Sfloat; // float3
+			attributeDescriptions[1].offset = offsetof(Particle, velocity);
+
+			// Mass
+			attributeDescriptions[2].binding = 0;
+			attributeDescriptions[2].location = 2; // Maps to MASS in Slang
+			attributeDescriptions[2].format = vk::Format::eR32Sfloat; // float
+			attributeDescriptions[2].offset = offsetof(Particle, mass);
+
+			return attributeDescriptions;
+		};
+
+		void init() {
+			iterations = 100000;
+
+			simulation = (BHSim*)malloc(sizeof(BHSim));
+
+			simulation->nBodies = NBODIES;
+			simulation->dt = 0.1667;
+			simulation->theta = 0.5;
+
+			simulation->bodies.x = (real*)malloc(simulation->nBodies * sizeof(real));
+			simulation->bodies.y = (real*)malloc(simulation->nBodies * sizeof(real));
+			simulation->bodies.z = (real*)malloc(simulation->nBodies * sizeof(real));
+			simulation->bodies.w = (real*)malloc(simulation->nBodies * sizeof(real));
+
+			simulation->vel.x = (real*)malloc(simulation->nBodies * sizeof(real));
+			simulation->vel.y = (real*)malloc(simulation->nBodies * sizeof(real));
+			simulation->vel.z = (real*)malloc(simulation->nBodies * sizeof(real));
+
+			simulation->force.x = (real*)malloc(simulation->nBodies * sizeof(real));
+			simulation->force.y = (real*)malloc(simulation->nBodies * sizeof(real));
+			simulation->force.z = (real*)malloc(simulation->nBodies * sizeof(real));
+
+			simulation->octree = (octreeArray*)malloc(sizeof(octreeArray));
+
+			simulation->octree->nBodies = simulation->nBodies;
+			simulation->octree->arraySize = simulation->nBodies * 2;
+			simulation->octree->array = (octreeNode*)malloc(simulation->octree->arraySize * sizeof(octreeNode));
+
+			simulation->octree->nodesArray.x = (real*)malloc(simulation->octree->arraySize * sizeof(real));
+			simulation->octree->nodesArray.y = (real*)malloc(simulation->octree->arraySize * sizeof(real));
+			simulation->octree->nodesArray.z = (real*)malloc(simulation->octree->arraySize * sizeof(real));
+			simulation->octree->nodesArray.w = (real*)malloc(simulation->octree->arraySize * sizeof(real));
+
+			simulation->octree->nodesChildrenArray.x = (real*)malloc(simulation->octree->arraySize * 8 * sizeof(real));
+			simulation->octree->nodesChildrenArray.y = (real*)malloc(simulation->octree->arraySize * 8 * sizeof(real));
+			simulation->octree->nodesChildrenArray.z = (real*)malloc(simulation->octree->arraySize * 8 * sizeof(real));
+			simulation->octree->nodesChildrenArray.w = (real*)malloc(simulation->octree->arraySize * 8 * sizeof(real));
+
+			simulation->octree->nChildrenArray = (unsigned int*)malloc(simulation->octree->arraySize * sizeof(unsigned int));
+			simulation->octree->idChildrenArray = (unsigned int*)malloc(simulation->octree->arraySize * sizeof(unsigned int) * 8);
+			simulation->octree->posChildrenArray = (unsigned int*)malloc(simulation->octree->arraySize * sizeof(unsigned int) * 8);
+			
+			randomizeBodies(simulation->bodies, simulation->vel, 100.54f, simulation->nBodies, 1e14f);
+
+			// Calculate the mathematically perfect speed for a stable binary orbit
+			const float G = 6.67430e-11f;
+			float coreMass = 1e14f;
+			float coreDistanceFromCenter = 500.0f;
+			float stableOrbitalVel = sqrtf((G * coreMass) / (4.0f * coreDistanceFromCenter)); // ~1.826 m/s
+
+			// Cluster 1 Center (Black Hole 1)
+			simulation->bodies.x[0] = coreDistanceFromCenter;
+			simulation->bodies.y[0] = 0.0f;
+			simulation->bodies.z[0] = 0.0f;
+			simulation->bodies.w[0] = coreMass;
+
+			simulation->vel.x[0] = 0.0f;
+			simulation->vel.y[0] = -stableOrbitalVel; // Orbiting clockwise/counter-clockwise
+			simulation->vel.z[0] = 0.0f;
+
+			// Shift the first half of the particles to orbit around Cluster 1
+			for(int i = 1; i < simulation->nBodies / 2; i++)
+			{
+				simulation->bodies.x[i] += coreDistanceFromCenter; 
+				simulation->vel.y[i] += -stableOrbitalVel; // Inherit core velocity
+			}
+
+			// Cluster 2 Center (Black Hole 2)
+			simulation->bodies.x[1] = -coreDistanceFromCenter;
+			simulation->bodies.y[1] = 0.0f;
+			simulation->bodies.z[1] = 0.0f;
+			simulation->bodies.w[1] = coreMass;
+
+			simulation->vel.x[1] = 0.0f;
+			simulation->vel.y[1] = stableOrbitalVel; // Moving opposite to Core 1
+			simulation->vel.z[1] = 0.0f;
+
+			// Shift the second half of the particles to orbit around Cluster 2
+			for(int i = simulation->nBodies / 2; i < simulation->nBodies; i++)
+			{
+				if (i == 1) continue; 
+				simulation->bodies.x[i] += -coreDistanceFromCenter;
+				simulation->vel.y[i] += stableOrbitalVel; // Inherit core velocity
+			}
+
+			printf("n=%d bodies for %d iterations:\n", simulation->nBodies, iterations);
+		}
+
+		bool step(std::vector<Particle>& targetParticles) {
+		if (it < iterations)
+		{
+			buildOctreeArray(simulation);
+			transferOctreeArray(simulation->octree);
+			integrateOctreeArray(simulation);
+
+			// Resize the target vector if it doesn't match the current simulation size
+			if (targetParticles.size() != simulation->nBodies) {
+				targetParticles.resize(simulation->nBodies);
+			}
+
+			for (int i = 0; i < simulation->nBodies; i++) {
+				targetParticles[i].position[0] = simulation->bodies.x[i]/1000.0f;
+				targetParticles[i].position[1] = simulation->bodies.y[i]/1000.0f;
+				targetParticles[i].position[2] = simulation->bodies.z[i]/1000.0f;
+
+				targetParticles[i].velocity[0] = simulation->vel.x[i];
+				targetParticles[i].velocity[1] = simulation->vel.y[i];
+				targetParticles[i].velocity[2] = simulation->vel.z[i];
+
+				targetParticles[i].mass = simulation->bodies.w[i];
+			}
+			
+			it++;
+			return true;
+		}
+		return false;
+	}
+
+		void free() {
+			real3 p_av = average(simulation->bodies, simulation->nBodies);
+			printf("Average position: (%f,%f,%f)\n", p_av.x, p_av.y, p_av.z);
+			printf("Body-0  position: (%f,%f,%f)\n", simulation->bodies.x[0], simulation->bodies.y[0], simulation->bodies.z[0]);
+
+			freeAll(simulation);
+		}
+	private:
+		int it;
+		int iterations;
+		BHSim* simulation;
+		Particle bodies;
+};
+
+// end of n body defs
 
 static std::vector<char> readFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -43,15 +223,19 @@ static std::vector<char> readFile(const std::string& filename) {
 	return buffer;
 }
 
-class HelloTriangleApplication
+class NBodyRenderer
 {
   public:
 	void run()
 	{
+		BarnesHutSim.init();
+
 		initWindow();
 		initVulkan();
 		mainLoop();
 		cleanup();
+		
+		BarnesHutSim.free();
 	}
 
   private:
@@ -77,6 +261,19 @@ class HelloTriangleApplication
 	vk::raii::Semaphore presentCompleteSemaphore = nullptr;
 	vk::raii::Semaphore renderFinishedSemaphore  = nullptr;
 	vk::raii::Fence     drawFence                = nullptr;
+
+	// Simulation variables
+	uint32_t particleCount = NBODIES; // Change this to your desired amount
+	std::vector<Particle> particles; 
+
+	// Vulkan handles for your vertex data
+	vk::raii::Buffer vertexBuffer = nullptr;
+	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+
+	double lastTime = 0.0;
+	int nbFrames = 0;
+
+	NBSim BarnesHutSim;
 	
 	std::vector<const char *> requiredDeviceExtension = {
 	    vk::KHRSwapchainExtensionName};
@@ -102,15 +299,41 @@ class HelloTriangleApplication
 		createImageViews();
 		createGraphicsPipeline();
 		createCommandPool();
+
+		createVertexBuffer(); // Bodies buffer
+
 		createCommandBuffer();
     	createSyncObjects();
+		
 	}
 
 	void mainLoop()
 	{
+		lastTime = glfwGetTime();
+
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
+
+			double currentTime = glfwGetTime();
+			nbFrames++;
+			
+			if (currentTime - lastTime >= 1.0) {
+				double fps = double(nbFrames) / (currentTime - lastTime);
+				std::string title = "Vulkan N-Body Simulation - FPS: " + std::to_string(static_cast<int>(fps));
+				glfwSetWindowTitle(window, title.c_str());
+
+				nbFrames = 0;
+				lastTime = currentTime;
+			}
+
+			bool isRunning = BarnesHutSim.step(particles); 
+			
+			if (isRunning) {
+				updateVertexBuffer();
+			}
+
+			updateVertexBuffer();
 			drawFrame();
 		}
 	}
@@ -435,10 +658,18 @@ class HelloTriangleApplication
 			fragShaderStageInfo
 		};
 
-		vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
-	
+		auto bindingDescription = NBSim::getBindingDescription();
+		auto attributeDescriptions = NBSim::getAttributeDescriptions();
+
+		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+		vertexInputInfo.vertexBindingDescriptionCount = 1;
+		vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+		vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+		vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+			
 		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
-			.topology = vk::PrimitiveTopology::eTriangleList
+			.topology = vk::PrimitiveTopology::ePointList,
+			.primitiveRestartEnable = vk::False
 		};
 	
 		std::vector<vk::DynamicState> dynamicStates = {
@@ -460,7 +691,7 @@ class HelloTriangleApplication
 			.depthClampEnable        = vk::False,
 			.rasterizerDiscardEnable = vk::False,
 			.polygonMode             = vk::PolygonMode::eFill,
-			.cullMode                = vk::CullModeFlagBits::eBack,
+			.cullMode                = vk::CullModeFlagBits::eNone, // No need for culling without faces
 			.frontFace               = vk::FrontFace::eClockwise,
 			.depthBiasEnable         = vk::False,
 			.lineWidth               = 1.0f
@@ -576,11 +807,15 @@ class HelloTriangleApplication
 		    .colorAttachmentCount = 1,
 		    .pColorAttachments    = &attachmentInfo};
 
+		vk::Buffer vertexBuffers[] = { *vertexBuffer };
+		vk::DeviceSize offsets[] = { 0 };
+		commandBuffer.bindVertexBuffers(0, vertexBuffers, offsets);
+
 		commandBuffer.beginRendering(renderingInfo);
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
 		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
 		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
-		commandBuffer.draw(3, 1, 0, 0);
+		commandBuffer.draw(particleCount, 1, 0, 0);
 		commandBuffer.endRendering();
 
 		// After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
@@ -705,13 +940,79 @@ class HelloTriangleApplication
 
 		return extensions;
 	}
+
+	// N-body helper functions
+
+	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) 
+	{
+		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+				return i;
+			}
+		}
+		throw std::runtime_error("failed to find suitable memory type!");
+	}
+
+	void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties, 
+					vk::raii::Buffer& buffer, vk::raii::DeviceMemory& bufferMemory) 
+					{
+		
+		vk::BufferCreateInfo bufferInfo{};
+		bufferInfo.size = size;
+		bufferInfo.usage = usage;
+		bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+		buffer = vk::raii::Buffer(device, bufferInfo);
+
+		vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+
+		vk::MemoryAllocateInfo allocInfo{};
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
+
+		bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
+		buffer.bindMemory(*bufferMemory, 0);
+	}
+
+	void createVertexBuffer() {
+		BarnesHutSim.step(particles);
+    	particleCount = static_cast<uint32_t>(particles.size());
+
+		vk::DeviceSize bufferSize = sizeof(Particle) * particleCount;
+
+		// Initialize your particle vectors with your initial simulation states here
+		particles.resize(particleCount);
+		// e.g., fill particles[i].position and mass...
+
+		// Create a buffer that functions as a Vertex Buffer and can be written to by the host (CPU)
+		createBuffer(
+			bufferSize,
+			vk::BufferUsageFlagBits::eVertexBuffer,
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+			vertexBuffer,
+			vertexBufferMemory
+		);
+
+		// Initial upload of data
+		updateVertexBuffer();
+	}
+
+	void updateVertexBuffer() {
+		vk::DeviceSize bufferSize = sizeof(Particle) * particles.size();
+		
+		// Map the GPU memory to a temporary CPU pointer, copy data, and unmap immediately
+		void* data = vertexBufferMemory.mapMemory(0, bufferSize);
+		std::memcpy(data, particles.data(), static_cast<size_t>(bufferSize));
+		vertexBufferMemory.unmapMemory();
+	}
 };
 
 int main()
 {
 	try
 	{
-		HelloTriangleApplication app;
+		NBodyRenderer app;
 		app.run();
 	}
 	catch (const std::exception &e)

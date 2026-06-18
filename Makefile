@@ -1,7 +1,7 @@
 # Variables for compiler and flags
 CXX = g++
-CXXFLAGS = -std=c++20 -Wall -Wextra
-LIBS = -lglfw -lvulkan
+CXXFLAGS = -std=c++20 -Wall -Wextra -fopenmp -Ofast -march=native -lm
+LIBS = -lglfw -lvulkan -fopenmp -fopenmp -Ofast -march=native -lm
 
 # Name of the final executable
 TARGET = exec
