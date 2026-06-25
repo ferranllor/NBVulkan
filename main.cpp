@@ -19,10 +19,16 @@ constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 
 float zoomFactor = 1.0f;
-float rotationAngle = 0.0f;
+float rotationAngle = 0.0f;   // horizontal orbit / auto rotation
+float cameraPitch = 0.0f;     // vertical mouse tilt
+
 bool autoRotate = true;
 float rotationSpeed = 0.002f;
 bool simulationPaused = false;
+
+bool mouseDragging = false;
+double lastMouseX = 0.0;
+double lastMouseY = 0.0;
 
 const std::vector<char const *> validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
@@ -58,6 +64,48 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset)
     glfwSetWindowTitle(window, title.c_str());
     //std::cout << "SCROLL DETECTED -> " << zoomFactor << std::endl;
 };
+
+
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
+{
+    (void)mods;
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT)
+    {
+        if (action == GLFW_PRESS)
+        {
+            mouseDragging = true;
+            glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+        }
+        else if (action == GLFW_RELEASE)
+        {
+            mouseDragging = false;
+        }
+    }
+}
+
+void cursorPositionCallback(GLFWwindow* window, double xpos, double ypos)
+{
+    (void)window;
+
+    if (mouseDragging)
+    {
+        double dx = xpos - lastMouseX;
+        double dy = ypos - lastMouseY;
+
+        rotationAngle += static_cast<float>(dx) * 0.005f;
+        cameraPitch   += static_cast<float>(dy) * 0.0035f;
+
+        if (cameraPitch > 1.0f)
+            cameraPitch = 1.0f;
+
+        if (cameraPitch < -1.0f)
+            cameraPitch = -1.0f;
+
+        lastMouseX = xpos;
+        lastMouseY = ypos;
+    }
+}
 
 class NBSim 
 {
@@ -316,6 +364,8 @@ float cameraZ = 2.0f;
 
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
 		glfwSetScrollCallback(window, scrollCallback);
+        glfwSetMouseButtonCallback(window, mouseButtonCallback);
+        glfwSetCursorPosCallback(window, cursorPositionCallback);
 	}
 
 	void initVulkan()
@@ -378,15 +428,18 @@ if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS)
 {
     if (!hPressed)
     {
-        std::cout << "\n===== CONTROLS =====\n";
-        std::cout << "Mouse Wheel : Zoom\n";
-        std::cout << "0           : Reset Zoom\n";
-        std::cout << "R           : Toggle Rotation\n";
-        std::cout << "UP          : Increase Rotation Speed\n";
-        std::cout << "DOWN        : Decrease Rotation Speed\n";
-        std::cout << "SPACE       : Pause / Resume Simulation\n";
-        std::cout << "H           : Show Help\n";
-        std::cout << "====================\n\n";
+        std::cout << "===== CONTROLS =====" << std::endl;
+        std::cout << "Mouse Wheel  : Zoom" << std::endl;
+        std::cout << "0            : Reset Zoom" << std::endl;
+        std::cout << "R            : Toggle Rotation" << std::endl;
+        std::cout << "UP           : Increase Rotation Speed" << std::endl;
+        std::cout << "DOWN         : Decrease Rotation Speed" << std::endl;
+        std::cout << "SPACE        : Pause / Resume Simulation" << std::endl;
+        std::cout << "LEFT DRAG    : Orbit Camera" << std::endl;
+        std::cout << "  Left/Right : Rotate View" << std::endl;
+        std::cout << "  Up/Down    : Tilt View" << std::endl;
+        std::cout << "H            : Show Help" << std::endl;
+        std::cout << "====================" << std::endl;
 
         hPressed = true;
     }
@@ -1130,18 +1183,27 @@ void updateVertexBuffer() {
 {
     float x = p.position[0];
     float y = p.position[1];
+    float z = p.position[2];
 
-    float rotatedX =
-        x * cos(rotationAngle) -
-        y * sin(rotationAngle);
+    // Horizontal orbit / auto rotation around Z axis
+    float cosYaw = cos(rotationAngle);
+    float sinYaw = sin(rotationAngle);
 
-    float rotatedY =
-        x * sin(rotationAngle) +
-        y * cos(rotationAngle);
+    float x1 = x * cosYaw - y * sinYaw;
+    float y1 = x * sinYaw + y * cosYaw;
+    float z1 = z;
 
-    p.position[0] = rotatedX * zoomFactor;
-    p.position[1] = rotatedY * zoomFactor;
-    p.position[2] *= zoomFactor;
+    // Vertical tilt from mouse drag
+    float cosPitch = cos(cameraPitch);
+    float sinPitch = sin(cameraPitch);
+
+    float y2 = y1 * cosPitch - z1 * sinPitch;
+    // We do not use z2 for rendering because changing clip-space Z can make particles disappear.
+
+    // Apply zoom
+    p.position[0] = x1 * zoomFactor;
+    p.position[1] = y2 * zoomFactor;
+    p.position[2] = 0.5f;  // keep particles inside Vulkan visible depth range
 }
 
     void* data = vertexBufferMemory.mapMemory(0, bufferSize);
