@@ -37,7 +37,7 @@ constexpr bool enableValidationLayers = true;
 
 #include "simulation.h"
 
-#define NBODIES 50000
+#define NBODIES 100000
 
 struct Particle {
     float position[3];
@@ -100,7 +100,7 @@ class NBSim
 			simulation = (BHSim*)malloc(sizeof(BHSim));
 
 			simulation->nBodies = NBODIES;
-			simulation->dt = 0.1667;
+			simulation->dt = 0.15;
 			simulation->theta = 0.5;
 
 			simulation->bodies.x = (real*)malloc(simulation->nBodies * sizeof(real));
@@ -183,34 +183,34 @@ class NBSim
 		}
 
 		bool step(std::vector<Particle>& targetParticles) {
-		if (it < iterations)
-		{
-			buildOctreeArray(simulation);
-			transferOctreeArray(simulation->octree);
-			integrateOctreeArray(simulation);
+			if (it < iterations)
+			{
+				buildOctreeArray(simulation);
+				transferOctreeArray(simulation->octree);
+				integrateOctreeArray(simulation);
 
-			// Resize the target vector if it doesn't match the current simulation size
-			if (targetParticles.size() != simulation->nBodies) {
-				targetParticles.resize(simulation->nBodies);
+				// Resize the target vector if it doesn't match the current simulation size
+				if (targetParticles.size() != simulation->nBodies) {
+					targetParticles.resize(simulation->nBodies);
+				}
+
+				for (int i = 0; i < simulation->nBodies; i++) {
+					targetParticles[i].position[0] = simulation->bodies.x[i]/1000.0f;
+					targetParticles[i].position[1] = simulation->bodies.y[i]/1000.0f;
+					targetParticles[i].position[2] = simulation->bodies.z[i]/1000.0f;
+
+					targetParticles[i].velocity[0] = simulation->vel.x[i];
+					targetParticles[i].velocity[1] = simulation->vel.y[i];
+					targetParticles[i].velocity[2] = simulation->vel.z[i];
+
+					targetParticles[i].mass = simulation->bodies.w[i];
+				}
+				
+				it++;
+				return true;
 			}
-
-			for (int i = 0; i < simulation->nBodies; i++) {
-				targetParticles[i].position[0] = simulation->bodies.x[i]/1000.0f;
-				targetParticles[i].position[1] = simulation->bodies.y[i]/1000.0f;
-				targetParticles[i].position[2] = simulation->bodies.z[i]/1000.0f;
-
-				targetParticles[i].velocity[0] = simulation->vel.x[i];
-				targetParticles[i].velocity[1] = simulation->vel.y[i];
-				targetParticles[i].velocity[2] = simulation->vel.z[i];
-
-				targetParticles[i].mass = simulation->bodies.w[i];
-			}
-			
-			it++;
-			return true;
+			return false;
 		}
-		return false;
-	}
 
 		void free() {
 			real3 p_av = average(simulation->bodies, simulation->nBodies);
@@ -219,6 +219,9 @@ class NBSim
 
 			freeAll(simulation);
 		}
+		
+		void setTimeStep(real dt) { simulation->dt = dt; }
+		real getTimeStep() { return simulation->dt; }
 	private:
 		int it;
 		int iterations;
@@ -284,7 +287,7 @@ class NBodyRenderer
 	vk::raii::Fence     drawFence                = nullptr;
 
 	// Simulation variables
-	uint32_t particleCount = NBODIES; // Change this to your desired amount
+	uint32_t particleCount = NBODIES;
 	std::vector<Particle> particles; 
 
 	// Vulkan handles for your vertex data
@@ -295,17 +298,18 @@ class NBodyRenderer
 	int nbFrames = 0;
 
 	// Orbit camera
-float orbitAngle = 0.0f;
-float orbitRadius = 2.0f;
+	float orbitAngle = 0.0f;
+	float orbitRadius = 2.0f;
 
-float cameraX = 0.0f;
-float cameraY = 0.0f;
-float cameraZ = 2.0f;
+	float cameraX = 0.0f;
+	float cameraY = 0.0f;
+	float cameraZ = 2.0f;
 
 	NBSim BarnesHutSim;
 	
 	std::vector<const char *> requiredDeviceExtension = {
-	    vk::KHRSwapchainExtensionName};
+	    vk::KHRSwapchainExtensionName
+	};
 
 	void initWindow()
 	{
@@ -340,117 +344,131 @@ float cameraZ = 2.0f;
 	void mainLoop()
 	{
 		lastTime = glfwGetTime();
+		real dt = BarnesHutSim.getTimeStep();
+		double fps = 0;
 
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
 			static bool rPressed = false;
 
-if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
-{
-    if (!rPressed)
-    {
-        autoRotate = !autoRotate;
-        rPressed = true;
-    }
-}
-else
-{
-    rPressed = false;
-}
-static bool spacePressed = false;
+			if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+			{
+				if (!rPressed)
+				{
+					autoRotate = !autoRotate;
+					rPressed = true;
+				}
+			}
+			else
+			{
+				rPressed = false;
+			}
+			static bool spacePressed = false;
 
-if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-{
-    if (!spacePressed)
-    {
-        simulationPaused = !simulationPaused;
-        spacePressed = true;
-    }
-}
-else
-{
-    spacePressed = false;
-}
-static bool hPressed = false;
+			if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+			{
+				if (!spacePressed)
+				{
+					simulationPaused = !simulationPaused;
+					spacePressed = true;
+				}
+			}
+			else
+			{
+				spacePressed = false;
+			}
+			static bool hPressed = false;
 
-if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS)
-{
-    if (!hPressed)
-    {
-        std::cout << "\n===== CONTROLS =====\n";
-        std::cout << "Mouse Wheel : Zoom\n";
-        std::cout << "0           : Reset Zoom\n";
-        std::cout << "R           : Toggle Rotation\n";
-        std::cout << "UP          : Increase Rotation Speed\n";
-        std::cout << "DOWN        : Decrease Rotation Speed\n";
-        std::cout << "SPACE       : Pause / Resume Simulation\n";
-        std::cout << "H           : Show Help\n";
-        std::cout << "====================\n\n";
+			if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS)
+			{
+				if (!hPressed)
+				{
+					std::cout << "\n===== CONTROLS =====\n";
+					std::cout << "Mouse Wheel : Zoom\n";
+					std::cout << "0           : Reset Zoom\n";
+					std::cout << "R           : Toggle Rotation\n";
+					std::cout << "UP          : Increase Rotation Speed\n";
+					std::cout << "DOWN        : Decrease Rotation Speed\n";
+					std::cout << "SPACE       : Pause / Resume Simulation\n";
+					std::cout << "H           : Show Help\n";
+					std::cout << "====================\n\n";
 
-        hPressed = true;
-    }
-}
-else
-{
-    hPressed = false;
-}
-if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS)
-{
-    zoomFactor = 1.0f;
-}
-if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
-{
-    rotationSpeed += 0.0005f;
-}
+					hPressed = true;
+				}
+			}
+			else
+			{
+				hPressed = false;
+			}
+			if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS)
+			{
+				zoomFactor = 1.0f;
+			}
+			if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
+			{
+				rotationSpeed += 0.0005f;
+			}
 
-if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
-{
-    rotationSpeed -= 0.0005f;
+			if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
+			{
+				rotationSpeed -= 0.0005f;
+			}
 
-    if (rotationSpeed < 0.0f)
-        rotationSpeed = 0.0f;
-}
+			if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
+			{
+				dt += 0.05f; //speed up
+				BarnesHutSim.setTimeStep(dt);
+			}
 
+			if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
+			{
+				dt -= 0.05f; //slow down
+				BarnesHutSim.setTimeStep(dt);
+			}			
+			
+			if (autoRotate)
+			{
+				rotationAngle += rotationSpeed;
+			}
+
+			orbitAngle += 0.01f;
+
+			cameraX = orbitRadius * cos(orbitAngle);
+			cameraZ = orbitRadius * sin(orbitAngle);
 
 			double currentTime = glfwGetTime();
-			if (autoRotate)
-{
-    rotationAngle += rotationSpeed;
-}
-
-orbitAngle += 0.01f;
-
-cameraX = orbitRadius * cos(orbitAngle);
-cameraZ = orbitRadius * sin(orbitAngle);
-
-nbFrames++;
+			nbFrames++;
 			
 			if (currentTime - lastTime >= 1.0) {
-				double fps = double(nbFrames) / (currentTime - lastTime);
-    std::string title =
-    "NBody | FPS: " +
-    std::to_string(static_cast<int>(fps)) +
-    " | Bodies: " +
-    std::to_string(particleCount) +
-    " | Zoom: " +
-    std::to_string(zoomFactor) +
-    " | Rot: " +
-    std::to_string(rotationSpeed) +
-    " | State: " +
-    std::string(simulationPaused ? "PAUSED" : "RUNNING");
-				glfwSetWindowTitle(window, title.c_str());
-
+				fps = double(nbFrames) / (currentTime - lastTime);
+		
 				nbFrames = 0;
 				lastTime = currentTime;
 			}
 
+			std::string title =
+				"NBody | FPS: " +
+				std::to_string(static_cast<int>(fps)) +
+				" | Bodies: " +
+				std::to_string(particleCount) +
+				" | DT: " +
+				std::to_string(BarnesHutSim.getTimeStep()) +
+				" | Zoom: " +
+				std::to_string(zoomFactor) +
+				" | Rot: " +
+				std::to_string(rotationSpeed) +
+				" | State: " +
+				std::string(simulationPaused ? "PAUSED" : "RUNNING");
+
+			glfwSetWindowTitle(window, title.c_str());
+
 			bool isRunning = false;
 
-if (!simulationPaused)
-{
-    isRunning = BarnesHutSim.step(particles);
-}
+			if (!simulationPaused)
+			{
+				isRunning = BarnesHutSim.step(particles);
+			}
 			
 			if (isRunning) {
 				updateVertexBuffer();
@@ -1064,8 +1082,6 @@ if (!simulationPaused)
 		return extensions;
 	}
 
-	// N-body helper functions
-
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) 
 	{
 		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
@@ -1098,15 +1114,15 @@ if (!simulationPaused)
 		buffer.bindMemory(*bufferMemory, 0);
 	}
 
+	// N-body helper functions
+
 	void createVertexBuffer() {
 		BarnesHutSim.step(particles);
     	particleCount = static_cast<uint32_t>(particles.size());
 
 		vk::DeviceSize bufferSize = sizeof(Particle) * particleCount;
 
-		// Initialize your particle vectors with your initial simulation states here
 		particles.resize(particleCount);
-		// e.g., fill particles[i].position and mass...
 
 		// Create a buffer that functions as a Vertex Buffer and can be written to by the host (CPU)
 		createBuffer(
@@ -1121,34 +1137,35 @@ if (!simulationPaused)
 		updateVertexBuffer();
 	}
 
-void updateVertexBuffer() {
-    vk::DeviceSize bufferSize = sizeof(Particle) * particles.size();
+	void updateVertexBuffer() {
+		vk::DeviceSize bufferSize = sizeof(Particle) * particles.size();
 
-    std::vector<Particle> zoomedParticles = particles;
+		std::vector<Particle> zoomedParticles = particles;
 
-    for (auto& p : zoomedParticles)
-{
-    float x = p.position[0];
-    float y = p.position[1];
+		for (auto& p : zoomedParticles)
+		{
+			float x = p.position[0];
+			float y = p.position[1];
 
-    float rotatedX =
-        x * cos(rotationAngle) -
-        y * sin(rotationAngle);
+			float rotatedX =
+				x * cos(rotationAngle) -
+				y * sin(rotationAngle);
 
-    float rotatedY =
-        x * sin(rotationAngle) +
-        y * cos(rotationAngle);
+			float rotatedY =
+				x * sin(rotationAngle) +
+				y * cos(rotationAngle);
 
-    p.position[0] = rotatedX * zoomFactor;
-    p.position[1] = rotatedY * zoomFactor;
-    p.position[2] *= zoomFactor;
-}
+			p.position[0] = rotatedX * zoomFactor;
+			p.position[1] = rotatedY * zoomFactor;
+			p.position[2] *= zoomFactor;
+		}
 
-    void* data = vertexBufferMemory.mapMemory(0, bufferSize);
-    std::memcpy(data, zoomedParticles.data(), static_cast<size_t>(bufferSize));
-    vertexBufferMemory.unmapMemory();
-}
+		void* data = vertexBufferMemory.mapMemory(0, bufferSize);
+		std::memcpy(data, zoomedParticles.data(), static_cast<size_t>(bufferSize));
+		vertexBufferMemory.unmapMemory();
+	}
 };
+
 int main()
 {
 	try
