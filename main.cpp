@@ -14,15 +14,37 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 
 float zoomFactor = 1.0f;
-float rotationAngle = 0.0f;
+float rotationAngle = 0.0f;   // horizontal orbit / auto rotation
+float cameraPitch = 0.0f;     // vertical mouse tilt
+
 bool autoRotate = true;
 float rotationSpeed = 0.002f;
 bool simulationPaused = false;
+
+bool mouseDragging = false;
+double lastMouseX = 0.0;
+double lastMouseY = 0.0;
+
+double uiFPS = 0.0;
+
+static void check_vk_result(VkResult err)
+{
+    if (err == VK_SUCCESS)
+        return;
+
+    std::cerr << "ImGui Vulkan error: " << err << std::endl;
+
+    if (err < 0)
+        throw std::runtime_error("ImGui Vulkan error");
+}
 
 const std::vector<char const *> validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
@@ -47,6 +69,13 @@ struct Particle {
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset)
 {
+    if (ImGui::GetCurrentContext() != nullptr)
+    {
+        ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
+
+        if (ImGui::GetIO().WantCaptureMouse)
+            return;
+    }
     if (yoffset > 0)
 
 		zoomFactor *= 1.1f;
@@ -58,6 +87,68 @@ void scrollCallback(GLFWwindow* window, double xoffset, double yoffset)
     glfwSetWindowTitle(window, title.c_str());
     //std::cout << "SCROLL DETECTED -> " << zoomFactor << std::endl;
 };
+
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
+{
+    bool imguiCapturesMouse = false;
+
+    if (ImGui::GetCurrentContext() != nullptr)
+    {
+        ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
+        imguiCapturesMouse = ImGui::GetIO().WantCaptureMouse;
+    }
+
+    if (imguiCapturesMouse)
+    {
+        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
+            mouseDragging = false;
+
+        return;
+    }
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT)
+    {
+        if (action == GLFW_PRESS)
+        {
+            mouseDragging = true;
+            glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+        }
+        else if (action == GLFW_RELEASE)
+        {
+            mouseDragging = false;
+        }
+    }
+}
+
+void cursorPositionCallback(GLFWwindow* window, double xpos, double ypos)
+{
+    if (ImGui::GetCurrentContext() != nullptr)
+    {
+        ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
+
+        if (ImGui::GetIO().WantCaptureMouse)
+            return;
+    }
+
+    if (mouseDragging)
+    {
+        double dx = xpos - lastMouseX;
+        double dy = ypos - lastMouseY;
+
+        rotationAngle += static_cast<float>(dx) * 0.005f;
+        cameraPitch   += static_cast<float>(dy) * 0.0035f;
+
+        if (cameraPitch > 1.0f)
+            cameraPitch = 1.0f;
+
+        if (cameraPitch < -1.0f)
+            cameraPitch = -1.0f;
+
+        lastMouseX = xpos;
+        lastMouseY = ypos;
+    }
+}
+
 
 class NBSim 
 {
@@ -320,6 +411,8 @@ class NBodyRenderer
 
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
 		glfwSetScrollCallback(window, scrollCallback);
+                glfwSetMouseButtonCallback(window, mouseButtonCallback);
+                glfwSetCursorPosCallback(window, cursorPositionCallback);
 	}
 
 	void initVulkan()
@@ -338,6 +431,7 @@ class NBodyRenderer
 
 		createCommandBuffer();
     	createSyncObjects();
+                initImGui();
 		
 	}
 
@@ -384,17 +478,20 @@ class NBodyRenderer
 			{
 				if (!hPressed)
 				{
-					std::cout << "\n===== CONTROLS =====\n";
-					std::cout << "Mouse Wheel : Zoom\n";
-					std::cout << "0           : Reset Zoom\n";
-					std::cout << "R           : Toggle Rotation\n";
-					std::cout << "UP          : Increase Rotation Speed\n";
-					std::cout << "DOWN        : Decrease Rotation Speed\n";
-					std::cout << "SPACE       : Pause / Resume Simulation\n";
-					std::cout << "H           : Show Help\n";
-					std::cout << "====================\n\n";
+                                        std::cout << "\n===== CONTROLS =====\n";
+                                        std::cout << "Mouse Wheel : Zoom\n";
+                                        std::cout << "Left Drag   : Orbit / Tilt Camera\n";
+                                        std::cout << "0           : Reset Zoom\n";
+                                        std::cout << "R           : Toggle Rotation\n";
+                                        std::cout << "RIGHT       : Increase Rotation Speed\n";
+                                        std::cout << "LEFT        : Decrease Rotation Speed\n";
+                                        std::cout << "UP          : Increase Simulation Time Step\n";
+                                        std::cout << "DOWN        : Decrease Simulation Time Step\n";
+                                        std::cout << "SPACE       : Pause / Resume Simulation\n";
+                                        std::cout << "H           : Show Help\n";
+                                        std::cout << "====================\n\n";
 
-					hPressed = true;
+                                        hPressed = true;
 				}
 			}
 			else
@@ -442,6 +539,7 @@ class NBodyRenderer
 			
 			if (currentTime - lastTime >= 1.0) {
 				fps = double(nbFrames) / (currentTime - lastTime);
+                                uiFPS = fps;
 		
 				nbFrames = 0;
 				lastTime = currentTime;
@@ -481,10 +579,109 @@ class NBodyRenderer
 
 	void cleanup()
 	{
-		glfwDestroyWindow(window);
+		if (ImGui::GetCurrentContext() != nullptr)
+                {
+                        device.waitIdle();
+                        ImGui_ImplVulkan_Shutdown();
+                        ImGui_ImplGlfw_Shutdown();
+                        ImGui::DestroyContext();
+                }
+
+                glfwDestroyWindow(window);
 
 		glfwTerminate();
 	}
+
+
+        void initImGui()
+        {
+                IMGUI_CHECKVERSION();
+                ImGui::CreateContext();
+                ImGui::StyleColorsDark();
+
+                ImGui_ImplGlfw_InitForVulkan(window, false);
+
+                uint32_t imageCount = static_cast<uint32_t>(swapChainImages.size());
+                if (imageCount < 2)
+                        imageCount = 2;
+
+#ifdef IMGUI_IMPL_VULKAN_HAS_DYNAMIC_RENDERING
+                VkFormat colorFormat = static_cast<VkFormat>(swapChainSurfaceFormat.format);
+
+                VkPipelineRenderingCreateInfoKHR pipelineRenderingCreateInfo{};
+                pipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+                pipelineRenderingCreateInfo.colorAttachmentCount = 1;
+                pipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+#endif
+
+                ImGui_ImplVulkan_InitInfo initInfo{};
+                initInfo.ApiVersion = VK_API_VERSION_1_3;
+                initInfo.Instance = static_cast<VkInstance>(*instance);
+                initInfo.PhysicalDevice = static_cast<VkPhysicalDevice>(*physicalDevice);
+                initInfo.Device = static_cast<VkDevice>(*device);
+                initInfo.QueueFamily = queueIndex;
+                initInfo.Queue = static_cast<VkQueue>(*queue);
+
+                initInfo.DescriptorPoolSize = 100;
+
+                initInfo.MinImageCount = imageCount;
+                initInfo.ImageCount = imageCount;
+                initInfo.UseDynamicRendering = true;
+                initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+#ifdef IMGUI_IMPL_VULKAN_HAS_DYNAMIC_RENDERING
+                initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = pipelineRenderingCreateInfo;
+#else
+                throw std::runtime_error("Dear ImGui Vulkan backend does not support dynamic rendering.");
+#endif
+
+                initInfo.CheckVkResultFn = check_vk_result;
+                initInfo.MinAllocationSize = 1024 * 1024;
+
+                if (!ImGui_ImplVulkan_Init(&initInfo))
+                        throw std::runtime_error("Failed to initialize Dear ImGui.");
+        }
+
+        void renderImGuiPanel()
+        {
+                ImGui::SetNextWindowSize(ImVec2(340, 300), ImGuiCond_FirstUseEver);
+                ImGui::Begin("NBody Controls");
+
+                ImGui::Text("FPS: %.1f", uiFPS);
+                ImGui::Text("Bodies: %u", static_cast<unsigned int>(particleCount));
+                ImGui::Text("Time Step: %.3f", BarnesHutSim.getTimeStep());
+
+                ImGui::Separator();
+
+                ImGui::SliderFloat("Zoom", &zoomFactor, 0.1f, 20.0f, "%.2f");
+                ImGui::SliderFloat("Rotation Speed", &rotationSpeed, -0.02f, 0.02f, "%.4f");
+                ImGui::SliderFloat("Camera Tilt", &cameraPitch, -1.0f, 1.0f, "%.2f");
+
+                float currentDt = BarnesHutSim.getTimeStep();
+                if (ImGui::SliderFloat("Simulation Time Step", &currentDt, -2.0f, 2.0f, "%.3f"))
+                {
+                        BarnesHutSim.setTimeStep(currentDt);
+                }
+
+                ImGui::Checkbox("Auto Rotate", &autoRotate);
+                ImGui::Checkbox("Pause Simulation", &simulationPaused);
+
+                if (ImGui::Button("Reset Zoom"))
+                        zoomFactor = 1.0f;
+
+                ImGui::SameLine();
+
+                if (ImGui::Button("Reset Camera"))
+                {
+                        rotationAngle = 0.0f;
+                        cameraPitch = 0.0f;
+                }
+
+                ImGui::Separator();
+                ImGui::TextWrapped("Mouse wheel: zoom | Left drag: orbit/tilt | H: terminal help");
+
+                ImGui::End();
+        }
 
 	void drawFrame()
 	{
@@ -497,7 +694,16 @@ class NBodyRenderer
 
 		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphore, nullptr);
 		
-		recordCommandBuffer(imageIndex);
+
+                ImGui_ImplVulkan_NewFrame();
+                ImGui_ImplGlfw_NewFrame();
+                ImGui::NewFrame();
+
+                renderImGuiPanel();
+
+                ImGui::Render();
+
+                recordCommandBuffer(imageIndex);
 
 		vk::PipelineStageFlags waitDestinationStageMask( vk::PipelineStageFlagBits::eColorAttachmentOutput );
 		const vk::SubmitInfo   submitInfo {
@@ -957,7 +1163,13 @@ class NBodyRenderer
 		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
 		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 		commandBuffer.draw(particleCount, 1, 0, 0);
-		commandBuffer.endRendering();
+
+                ImGui_ImplVulkan_RenderDrawData(
+                    ImGui::GetDrawData(),
+                    static_cast<VkCommandBuffer>(*commandBuffer)
+                );
+
+                commandBuffer.endRendering();
 
 		// After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
 		transition_image_layout(
@@ -1143,22 +1355,27 @@ class NBodyRenderer
 		std::vector<Particle> zoomedParticles = particles;
 
 		for (auto& p : zoomedParticles)
-		{
-			float x = p.position[0];
-			float y = p.position[1];
+                {
+                        float x = p.position[0];
+                        float y = p.position[1];
+                        float z = p.position[2];
 
-			float rotatedX =
-				x * cos(rotationAngle) -
-				y * sin(rotationAngle);
+                        float cosYaw = cos(rotationAngle);
+                        float sinYaw = sin(rotationAngle);
 
-			float rotatedY =
-				x * sin(rotationAngle) +
-				y * cos(rotationAngle);
+                        float x1 = x * cosYaw - y * sinYaw;
+                        float y1 = x * sinYaw + y * cosYaw;
+                        float z1 = z;
 
-			p.position[0] = rotatedX * zoomFactor;
-			p.position[1] = rotatedY * zoomFactor;
-			p.position[2] *= zoomFactor;
-		}
+                        float cosPitch = cos(cameraPitch);
+                        float sinPitch = sin(cameraPitch);
+
+                        float y2 = y1 * cosPitch - z1 * sinPitch;
+
+                        p.position[0] = x1 * zoomFactor;
+                        p.position[1] = y2 * zoomFactor;
+                        p.position[2] = 0.5f;
+                }
 
 		void* data = vertexBufferMemory.mapMemory(0, bufferSize);
 		std::memcpy(data, zoomedParticles.data(), static_cast<size_t>(bufferSize));
