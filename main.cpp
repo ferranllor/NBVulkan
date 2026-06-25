@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <fstream>
 #include <omp.h>
+#include <cmath>
 
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
@@ -16,6 +17,12 @@
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
+
+float zoomFactor = 1.0f;
+float rotationAngle = 0.0f;
+bool autoRotate = true;
+float rotationSpeed = 0.002f;
+bool simulationPaused = false;
 
 const std::vector<char const *> validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
@@ -36,6 +43,20 @@ struct Particle {
     float position[3];
     float velocity[3];
     float mass;
+};
+
+void scrollCallback(GLFWwindow* window, double xoffset, double yoffset)
+{
+    if (yoffset > 0)
+
+		zoomFactor *= 1.1f;
+    else
+        zoomFactor *= 0.9f;
+
+    std::string title = "Zoom: " + std::to_string(zoomFactor);
+
+    glfwSetWindowTitle(window, title.c_str());
+    //std::cout << "SCROLL DETECTED -> " << zoomFactor << std::endl;
 };
 
 class NBSim 
@@ -273,6 +294,14 @@ class NBodyRenderer
 	double lastTime = 0.0;
 	int nbFrames = 0;
 
+	// Orbit camera
+float orbitAngle = 0.0f;
+float orbitRadius = 2.0f;
+
+float cameraX = 0.0f;
+float cameraY = 0.0f;
+float cameraZ = 2.0f;
+
 	NBSim BarnesHutSim;
 	
 	std::vector<const char *> requiredDeviceExtension = {
@@ -286,6 +315,7 @@ class NBodyRenderer
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+		glfwSetScrollCallback(window, scrollCallback);
 	}
 
 	void initVulkan()
@@ -314,20 +344,113 @@ class NBodyRenderer
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
+			static bool rPressed = false;
+
+if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+{
+    if (!rPressed)
+    {
+        autoRotate = !autoRotate;
+        rPressed = true;
+    }
+}
+else
+{
+    rPressed = false;
+}
+static bool spacePressed = false;
+
+if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+{
+    if (!spacePressed)
+    {
+        simulationPaused = !simulationPaused;
+        spacePressed = true;
+    }
+}
+else
+{
+    spacePressed = false;
+}
+static bool hPressed = false;
+
+if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS)
+{
+    if (!hPressed)
+    {
+        std::cout << "\n===== CONTROLS =====\n";
+        std::cout << "Mouse Wheel : Zoom\n";
+        std::cout << "0           : Reset Zoom\n";
+        std::cout << "R           : Toggle Rotation\n";
+        std::cout << "UP          : Increase Rotation Speed\n";
+        std::cout << "DOWN        : Decrease Rotation Speed\n";
+        std::cout << "SPACE       : Pause / Resume Simulation\n";
+        std::cout << "H           : Show Help\n";
+        std::cout << "====================\n\n";
+
+        hPressed = true;
+    }
+}
+else
+{
+    hPressed = false;
+}
+if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS)
+{
+    zoomFactor = 1.0f;
+}
+if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
+{
+    rotationSpeed += 0.0005f;
+}
+
+if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
+{
+    rotationSpeed -= 0.0005f;
+
+    if (rotationSpeed < 0.0f)
+        rotationSpeed = 0.0f;
+}
+
 
 			double currentTime = glfwGetTime();
-			nbFrames++;
+			if (autoRotate)
+{
+    rotationAngle += rotationSpeed;
+}
+
+orbitAngle += 0.01f;
+
+cameraX = orbitRadius * cos(orbitAngle);
+cameraZ = orbitRadius * sin(orbitAngle);
+
+nbFrames++;
 			
 			if (currentTime - lastTime >= 1.0) {
 				double fps = double(nbFrames) / (currentTime - lastTime);
-				std::string title = "Vulkan N-Body Simulation - FPS: " + std::to_string(static_cast<int>(fps));
+    std::string title =
+    "NBody | FPS: " +
+    std::to_string(static_cast<int>(fps)) +
+    " | Bodies: " +
+    std::to_string(particleCount) +
+    " | Zoom: " +
+    std::to_string(zoomFactor) +
+    " | Rot: " +
+    std::to_string(rotationSpeed) +
+    " | State: " +
+    std::string(simulationPaused ? "PAUSED" : "RUNNING");
 				glfwSetWindowTitle(window, title.c_str());
 
 				nbFrames = 0;
 				lastTime = currentTime;
 			}
 
-			bool isRunning = BarnesHutSim.step(particles); 
+			bool isRunning = false;
+
+if (!simulationPaused)
+{
+    isRunning = BarnesHutSim.step(particles);
+}
 			
 			if (isRunning) {
 				updateVertexBuffer();
@@ -998,16 +1121,34 @@ class NBodyRenderer
 		updateVertexBuffer();
 	}
 
-	void updateVertexBuffer() {
-		vk::DeviceSize bufferSize = sizeof(Particle) * particles.size();
-		
-		// Map the GPU memory to a temporary CPU pointer, copy data, and unmap immediately
-		void* data = vertexBufferMemory.mapMemory(0, bufferSize);
-		std::memcpy(data, particles.data(), static_cast<size_t>(bufferSize));
-		vertexBufferMemory.unmapMemory();
-	}
-};
+void updateVertexBuffer() {
+    vk::DeviceSize bufferSize = sizeof(Particle) * particles.size();
 
+    std::vector<Particle> zoomedParticles = particles;
+
+    for (auto& p : zoomedParticles)
+{
+    float x = p.position[0];
+    float y = p.position[1];
+
+    float rotatedX =
+        x * cos(rotationAngle) -
+        y * sin(rotationAngle);
+
+    float rotatedY =
+        x * sin(rotationAngle) +
+        y * cos(rotationAngle);
+
+    p.position[0] = rotatedX * zoomFactor;
+    p.position[1] = rotatedY * zoomFactor;
+    p.position[2] *= zoomFactor;
+}
+
+    void* data = vertexBufferMemory.mapMemory(0, bufferSize);
+    std::memcpy(data, zoomedParticles.data(), static_cast<size_t>(bufferSize));
+    vertexBufferMemory.unmapMemory();
+}
+};
 int main()
 {
 	try

@@ -19,14 +19,23 @@ struct VertexOutput {
 VertexOutput vertMain(VertexInput input) {
     VertexOutput output;
     
-    output.sv_position = float4(input.position, 1.0);
+    output.sv_position = float4(
+    input.position.x * 0.5,
+    input.position.y * 0.5,
+    input.position.z,
+    1.0
+);
     
     float vSquare = dot(input.velocity, input.velocity);
     float kineticEnergy = 0.5 * input.mass * vSquare;
 
     // Adjust the division based on the scale of the energy
     float normalizedEnergy = clamp(kineticEnergy / 2500.0, 0.0, 1.0); 
-    output.color = lerp(float3(0.0, 0.0, 1.0), float3(1.0, 0.0, 0.0), normalizedEnergy);
+    output.color = lerp(
+    float3(0.0, 0.0, 1.0),
+    float3(1.0, 0.0, 0.0),
+    normalizedEnergy
+);
     
     return output;
 }
