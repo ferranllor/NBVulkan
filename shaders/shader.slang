@@ -13,7 +13,14 @@ struct VertexInput {
 struct VertexOutput {
     float3 color;
     float4 sv_position : SV_Position;
+    float pointSize : SV_PointSize;
 };
+
+struct FragmentInput {
+    float3 color;
+    float4 sv_position : SV_Position;
+};
+
 
 [shader("vertex")]
 VertexOutput vertMain(VertexInput input) {
@@ -27,11 +34,14 @@ VertexOutput vertMain(VertexInput input) {
     // Adjust the division based on the scale of the energy
     float normalizedEnergy = clamp(kineticEnergy / 2500.0, 0.0, 1.0); 
     output.color = lerp(float3(0.0, 0.0, 1.0), float3(1.0, 0.0, 0.0), normalizedEnergy);
+
+    output.pointSize = 1.5f;
+
     
     return output;
 }
 
 [shader("fragment")]
-float4 fragMain(VertexOutput input) : SV_Target {
-    return float4(input.color, 1.0);
+float4 fragMain(FragmentInput input) : SV_Target {
+     return float4(input.color, 1.0);
 }
