@@ -1,3 +1,14 @@
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <omp.h>
+#include <stdexcept>
+
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include "vulkan/vulkan.hpp"
 #include <algorithm>
@@ -14,9 +25,35 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
+
+float zoomFactor = 1.0f;
+float rotationAngle = 0.0f; // horizontal orbit / auto rotation
+float cameraPitch = 0.0f;   // vertical mouse tilt
+
+bool autoRotate = true;
+float rotationSpeed = 0.002f;
+bool simulationPaused = false;
+
+bool mouseDragging = false;
+double lastMouseX = 0.0;
+double lastMouseY = 0.0;
+
+double uiFPS = 0.0;
+
+static void check_vk_result(VkResult err)
+{
+  if (err == VK_SUCCESS) return;
+
+  std::cerr << "ImGui Vulkan error: " << err << std::endl;
+
+  if (err < 0) throw std::runtime_error("ImGui Vulkan error");
+}
 
 const std::vector<char const *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -31,6 +68,8 @@ constexpr bool enableValidationLayers = true;
 #include "simulation.h"
 
 #define NBODIES 10000
+// Gas Grid Size (needs to be the same than the one in the shader)
+constexpr int GRID_SIZE = 300;
 
 struct Particle
 {
@@ -39,7 +78,82 @@ struct Particle
   float mass;
 };
 
-constexpr int GRID_SIZE = 300;
+void scrollCallback(GLFWwindow *window, double xoffset, double yoffset)
+{
+  if (ImGui::GetCurrentContext() != nullptr)
+  {
+    ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
+
+    if (ImGui::GetIO().WantCaptureMouse) return;
+  }
+  if (yoffset > 0)
+
+    zoomFactor *= 1.1f;
+  else
+    zoomFactor *= 0.9f;
+
+  std::string title = "Zoom: " + std::to_string(zoomFactor);
+
+  glfwSetWindowTitle(window, title.c_str());
+  // std::cout << "SCROLL DETECTED -> " << zoomFactor << std::endl;
+};
+
+void mouseButtonCallback(GLFWwindow *window, int button, int action, int mods)
+{
+  bool imguiCapturesMouse = false;
+
+  if (ImGui::GetCurrentContext() != nullptr)
+  {
+    ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
+    imguiCapturesMouse = ImGui::GetIO().WantCaptureMouse;
+  }
+
+  if (imguiCapturesMouse)
+  {
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) mouseDragging = false;
+
+    return;
+  }
+
+  if (button == GLFW_MOUSE_BUTTON_LEFT)
+  {
+    if (action == GLFW_PRESS)
+    {
+      mouseDragging = true;
+      glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+    }
+    else if (action == GLFW_RELEASE)
+    {
+      mouseDragging = false;
+    }
+  }
+}
+
+void cursorPositionCallback(GLFWwindow *window, double xpos, double ypos)
+{
+  if (ImGui::GetCurrentContext() != nullptr)
+  {
+    ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
+
+    if (ImGui::GetIO().WantCaptureMouse) return;
+  }
+
+  if (mouseDragging)
+  {
+    double dx = xpos - lastMouseX;
+    double dy = ypos - lastMouseY;
+
+    rotationAngle += static_cast<float>(dx) * 0.005f;
+    cameraPitch += static_cast<float>(dy) * 0.0035f;
+
+    if (cameraPitch > 1.0f) cameraPitch = 1.0f;
+
+    if (cameraPitch < -1.0f) cameraPitch = -1.0f;
+
+    lastMouseX = xpos;
+    lastMouseY = ypos;
+  }
+}
 
 struct DensityGrid
 {
@@ -260,9 +374,11 @@ public:
     printf("Average position: (%f,%f,%f)\n", p_av.x, p_av.y, p_av.z);
     printf("Body-0  position: (%f,%f,%f)\n", simulation->bodies.x[0], simulation->bodies.y[0],
            simulation->bodies.z[0]);
-
     freeAll(simulation);
   }
+
+  void setTimeStep(real dt) { simulation->dt = dt; }
+  real getTimeStep() { return simulation->dt; }
 
 private:
   int it;
@@ -331,7 +447,7 @@ private:
   vk::raii::Fence drawFence = nullptr;
 
   // Simulation variables
-  uint32_t particleCount = NBODIES; // Change this to your desired amount
+  uint32_t particleCount = NBODIES;
   std::vector<Particle> particles;
 
   // Vulkan handles for your vertex data
@@ -355,6 +471,14 @@ private:
   double lastTime = 0.0;
   int nbFrames = 0;
 
+  // Orbit camera
+  float orbitAngle = 0.0f;
+  float orbitRadius = 2.0f;
+
+  float cameraX = 0.0f;
+  float cameraY = 0.0f;
+  float cameraZ = 2.0f;
+
   NBSim BarnesHutSim;
 
   std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
@@ -367,6 +491,9 @@ private:
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+    glfwSetScrollCallback(window, scrollCallback);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetCursorPosCallback(window, cursorPositionCallback);
   }
 
   void initVulkan()
@@ -388,43 +515,135 @@ private:
 
     createCommandBuffer();
     createSyncObjects();
+    initImGui();
   }
 
   void mainLoop()
   {
     lastTime = glfwGetTime();
+    real dt = BarnesHutSim.getTimeStep();
+    double fps = 0;
 
     while (!glfwWindowShouldClose(window))
     {
       glfwPollEvents();
+
+      static bool rPressed = false;
+
+      if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+      {
+        if (!rPressed)
+        {
+          autoRotate = !autoRotate;
+          rPressed = true;
+        }
+      }
+      else
+      {
+        rPressed = false;
+      }
+      static bool spacePressed = false;
+
+      if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+      {
+        if (!spacePressed)
+        {
+          simulationPaused = !simulationPaused;
+          spacePressed = true;
+        }
+      }
+      else
+      {
+        spacePressed = false;
+      }
+      static bool hPressed = false;
+
+      if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS)
+      {
+        if (!hPressed)
+        {
+          std::cout << "\n===== CONTROLS =====\n";
+          std::cout << "Mouse Wheel : Zoom\n";
+          std::cout << "Left Drag   : Orbit / Tilt Camera\n";
+          std::cout << "0           : Reset Zoom\n";
+          std::cout << "R           : Toggle Rotation\n";
+          std::cout << "RIGHT       : Increase Rotation Speed\n";
+          std::cout << "LEFT        : Decrease Rotation Speed\n";
+          std::cout << "UP          : Increase Simulation Time Step\n";
+          std::cout << "DOWN        : Decrease Simulation Time Step\n";
+          std::cout << "SPACE       : Pause / Resume Simulation\n";
+          std::cout << "H           : Show Help\n";
+          std::cout << "====================\n\n";
+
+          hPressed = true;
+        }
+      }
+      else
+      {
+        hPressed = false;
+      }
+      if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS)
+      {
+        zoomFactor = 1.0f;
+      }
+      if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
+      {
+        rotationSpeed += 0.0005f;
+      }
+
+      if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
+      {
+        rotationSpeed -= 0.0005f;
+      }
+
+      if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
+      {
+        dt += 0.05f; // speed up
+        BarnesHutSim.setTimeStep(dt);
+      }
+
+      if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
+      {
+        dt -= 0.05f; // slow down
+        BarnesHutSim.setTimeStep(dt);
+      }
+
+      if (autoRotate)
+      {
+        rotationAngle += rotationSpeed;
+      }
+
+      orbitAngle += 0.01f;
+
+      cameraX = orbitRadius * cos(orbitAngle);
+      cameraZ = orbitRadius * sin(orbitAngle);
 
       double currentTime = glfwGetTime();
       nbFrames++;
 
       if (currentTime - lastTime >= 1.0)
       {
-        double fps = double(nbFrames) / (currentTime - lastTime);
-        std::string title =
-            "Vulkan N-Body Simulation - FPS: " + std::to_string(static_cast<int>(fps));
-        glfwSetWindowTitle(window, title.c_str());
+        fps = double(nbFrames) / (currentTime - lastTime);
+        uiFPS = fps;
 
         nbFrames = 0;
         lastTime = currentTime;
       }
 
-      bool isRunning = BarnesHutSim.step(particles);
+      std::string title = "NBody | FPS: " + std::to_string(static_cast<int>(fps)) +
+                          " | Bodies: " + std::to_string(particleCount) +
+                          " | DT: " + std::to_string(BarnesHutSim.getTimeStep()) +
+                          " | Zoom: " + std::to_string(zoomFactor) +
+                          " | Rot: " + std::to_string(rotationSpeed) +
+                          " | State: " + std::string(simulationPaused ? "PAUSED" : "RUNNING");
 
-      if (isRunning)
+      glfwSetWindowTitle(window, title.c_str());
+
+      bool isRunning = false;
+
+      if (!simulationPaused)
       {
-        gasGrid.reset();
-        for (auto &particle : particles)
-        {
-          if (particle.mass >= 0.99f * 1e14f) continue;
-          gasGrid.accumulate(particle.position[0], particle.position[1], particle.mass, 1.0f);
-        }
-        gasGrid.smooth();
-        updateVertexBuffer();
-        updateGasBuffer();
+        isRunning = BarnesHutSim.step(particles);
       }
 
       updateVertexBuffer();
@@ -434,9 +653,105 @@ private:
 
   void cleanup()
   {
+    if (ImGui::GetCurrentContext() != nullptr)
+    {
+      device.waitIdle();
+      ImGui_ImplVulkan_Shutdown();
+      ImGui_ImplGlfw_Shutdown();
+      ImGui::DestroyContext();
+    }
+
     glfwDestroyWindow(window);
 
     glfwTerminate();
+  }
+
+  void initImGui()
+  {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+
+    ImGui_ImplGlfw_InitForVulkan(window, false);
+
+    uint32_t imageCount = static_cast<uint32_t>(swapChainImages.size());
+    if (imageCount < 2) imageCount = 2;
+
+#ifdef IMGUI_IMPL_VULKAN_HAS_DYNAMIC_RENDERING
+    VkFormat colorFormat = static_cast<VkFormat>(swapChainSurfaceFormat.format);
+
+    VkPipelineRenderingCreateInfoKHR pipelineRenderingCreateInfo{};
+    pipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+    pipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    pipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+#endif
+
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.ApiVersion = VK_API_VERSION_1_3;
+    initInfo.Instance = static_cast<VkInstance>(*instance);
+    initInfo.PhysicalDevice = static_cast<VkPhysicalDevice>(*physicalDevice);
+    initInfo.Device = static_cast<VkDevice>(*device);
+    initInfo.QueueFamily = queueIndex;
+    initInfo.Queue = static_cast<VkQueue>(*queue);
+
+    initInfo.DescriptorPoolSize = 100;
+
+    initInfo.MinImageCount = imageCount;
+    initInfo.ImageCount = imageCount;
+    initInfo.UseDynamicRendering = true;
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+#ifdef IMGUI_IMPL_VULKAN_HAS_DYNAMIC_RENDERING
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = pipelineRenderingCreateInfo;
+#else
+    throw std::runtime_error("Dear ImGui Vulkan backend does not support dynamic rendering.");
+#endif
+
+    initInfo.CheckVkResultFn = check_vk_result;
+    initInfo.MinAllocationSize = 1024 * 1024;
+
+    if (!ImGui_ImplVulkan_Init(&initInfo))
+      throw std::runtime_error("Failed to initialize Dear ImGui.");
+  }
+
+  void renderImGuiPanel()
+  {
+    ImGui::SetNextWindowSize(ImVec2(340, 300), ImGuiCond_FirstUseEver);
+    ImGui::Begin("NBody Controls");
+
+    ImGui::Text("FPS: %.1f", uiFPS);
+    ImGui::Text("Bodies: %u", static_cast<unsigned int>(particleCount));
+    ImGui::Text("Time Step: %.3f", BarnesHutSim.getTimeStep());
+
+    ImGui::Separator();
+
+    ImGui::SliderFloat("Zoom", &zoomFactor, 0.1f, 20.0f, "%.2f");
+    ImGui::SliderFloat("Rotation Speed", &rotationSpeed, -0.02f, 0.02f, "%.4f");
+    ImGui::SliderFloat("Camera Tilt", &cameraPitch, -1.0f, 1.0f, "%.2f");
+
+    float currentDt = BarnesHutSim.getTimeStep();
+    if (ImGui::SliderFloat("Simulation Time Step", &currentDt, -2.0f, 2.0f, "%.3f"))
+    {
+      BarnesHutSim.setTimeStep(currentDt);
+    }
+
+    ImGui::Checkbox("Auto Rotate", &autoRotate);
+    ImGui::Checkbox("Pause Simulation", &simulationPaused);
+
+    if (ImGui::Button("Reset Zoom")) zoomFactor = 1.0f;
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("Reset Camera"))
+    {
+      rotationAngle = 0.0f;
+      cameraPitch = 0.0f;
+    }
+
+    ImGui::Separator();
+    ImGui::TextWrapped("Mouse wheel: zoom | Left drag: orbit/tilt | H: terminal help");
+
+    ImGui::End();
   }
 
   void drawFrame()
@@ -450,6 +765,12 @@ private:
 
     auto [result, imageIndex] =
         swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphore, nullptr);
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    renderImGuiPanel();
+    ImGui::Render();
 
     recordCommandBuffer(imageIndex);
 
@@ -904,6 +1225,10 @@ private:
                                            static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
     commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
     commandBuffer.draw(particleCount, 1, 0, 0);
+
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+                                    static_cast<VkCommandBuffer>(*commandBuffer));
+
     commandBuffer.endRendering();
 
     // After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
@@ -1080,16 +1405,50 @@ private:
                  vertexBuffer, vertexBufferMemory);
 
     // Initial upload of data
-    updateVertexBuffer();
+    // updateVertexBuffer();
   }
 
   void updateVertexBuffer()
   {
     vk::DeviceSize bufferSize = sizeof(Particle) * particles.size();
 
-    // Map the GPU memory to a temporary CPU pointer, copy data, and unmap immediately
+    std::vector<Particle> zoomedParticles = particles;
+
+    gasGrid.reset();
+
+    for (auto &p : zoomedParticles)
+    {
+      float x = p.position[0];
+      float y = p.position[1];
+      float z = p.position[2];
+
+      float cosYaw = cos(rotationAngle);
+      float sinYaw = sin(rotationAngle);
+
+      float x1 = x * cosYaw - y * sinYaw;
+      float y1 = x * sinYaw + y * cosYaw;
+      float z1 = z;
+
+      float cosPitch = cos(cameraPitch);
+      float sinPitch = sin(cameraPitch);
+
+      float y2 = y1 * cosPitch - z1 * sinPitch;
+
+      p.position[0] = x1 * zoomFactor;
+      p.position[1] = y2 * zoomFactor;
+      p.position[2] = 0.5f;
+
+      if (p.mass < 0.99 * 1e14f)
+      {
+        gasGrid.accumulate(p.position[0], p.position[1], p.mass, 1.0f);
+      }
+    }
+
+    gasGrid.smooth();
+    updateGasBuffer();
+
     void *data = vertexBufferMemory.mapMemory(0, bufferSize);
-    std::memcpy(data, particles.data(), static_cast<size_t>(bufferSize));
+    std::memcpy(data, zoomedParticles.data(), static_cast<size_t>(bufferSize));
     vertexBufferMemory.unmapMemory();
   }
 

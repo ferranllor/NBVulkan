@@ -38,7 +38,7 @@ float4 fragMain(VertexToFragment input) : SV_Target {
     
     float d = lerp(lerp(d00, d10, tx), lerp(d01, d11, tx), ty);
     
-    float norm = clamp(d * 0.08f, 0.0f, 1.0f); //0.03f
+    float norm = clamp(d * 0.09f, 0.0f, 1.0f); //0.03f
 
     if (norm < 0.005f)
     {

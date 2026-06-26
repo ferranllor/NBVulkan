@@ -26,7 +26,12 @@ struct FragmentInput {
 VertexOutput vertMain(VertexInput input) {
     VertexOutput output;
     
-    output.sv_position = float4(input.position, 1.0);
+    output.sv_position = float4(
+    input.position.x ,
+    input.position.y,
+    input.position.z,
+    1.0
+);
     
     float vSquare = dot(input.velocity, input.velocity);
     float kineticEnergy = 0.5 * input.mass * vSquare;
@@ -37,7 +42,6 @@ VertexOutput vertMain(VertexInput input) {
 
     output.pointSize = 1.5f;
 
-    
     return output;
 }
 
