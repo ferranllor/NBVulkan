@@ -2,4 +2,3 @@ bin/*
 obj/*
 shaders/*.spv
 imgui.ini
-imgui/*

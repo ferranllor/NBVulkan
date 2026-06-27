@@ -85,20 +85,6 @@ This design keeps the interaction easy to integrate while still giving the user 
 
 ## 6. Build and Run
 
-The project expects the `imgui` folder to be placed beside the `NBVulkan` folder:
-
-```text
-CG_Project/
-├── NBVulkan/
-└── imgui/
-```
-
-This is important because the Makefile uses ImGui from:
-
-```text
-../imgui
-```
-
 To build and run the project:
 
 ```bash
@@ -110,7 +96,7 @@ cd ..
 
 make clean
 make
-./exec
+./bin/exec
 ```
 
 If the program cannot find the shader files, run the shader compile step again before rebuilding.
@@ -122,13 +108,16 @@ If the program cannot find the shader files, run the shader compile step again b
 The main implementation areas are:
 
 * `main.cpp`
-  Contains the simulation application logic, interaction variables, mouse callbacks, ImGui frame creation, UI controls, camera/view transformation logic, and help menu updates.
+  Contains the simulation renderer, interaction variables, mouse callbacks, ImGui frame creation, UI controls, camera/view transformation logic, and help menu updates.
+
+* `simulation.h`
+  Contains the simulation application logic. The code is taken from [ferranllor/NBSim](https://github.com/ferranllor/NBSim). To use a different version of the code, it is as simple as modifying the step function to call the desired functions from the desired version. 
 
 * `Makefile`
   Builds the project and includes the Dear ImGui source files and backend files.
 
-* `../imgui`
-  External Dear ImGui dependency used by the project. This folder should remain beside the `NBVulkan` folder unless the Makefile paths are changed.
+* `imgui`
+  External Dear ImGui dependency used by the project. This folder should not be modified unless wanting to upgrade the imgui version.
 
 These areas are the best starting points for future developers who want to extend the user interface, add more controls, or improve the camera system.
 
@@ -136,7 +125,7 @@ These areas are the best starting points for future developers who want to exten
 
 ## 8. Performance Notes
 
-The simulation can be tested with different values of `NBODIES` in `main.cpp`. Performance depends on the system, Vulkan device, graphics driver, and whether the program is running on a native GPU Vulkan setup or software rendering.
+The simulation can be tested with different values of `NBODIES` in `main.cpp`. Performance depends on the system, Vulkan device, graphics driver, and whether the program is running on a native GPU Vulkan setup or software rendering. 
 
 For benchmarking, body counts were doubled each time to observe how performance changes as the problem size increases. The typical FPS value represents the stable observed FPS during runtime.
 
