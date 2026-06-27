@@ -136,16 +136,26 @@ These areas are the best starting points for future developers who want to exten
 
 ## 8. Performance Notes
 
-The simulation can be tested with different values of `NBODIES` in `main.cpp`. Example values include:
+The simulation can be tested with different values of `NBODIES` in `main.cpp`. Performance depends on the system, Vulkan device, graphics driver, and whether the program is running on a native GPU Vulkan setup or software rendering.
 
-```text
-10,000
-25,000
-50,000
-100,000
-```
+For benchmarking, body counts were doubled each time to observe how performance changes as the problem size increases. The typical FPS value represents the stable observed FPS during runtime.
 
-Performance depends on the system, Vulkan device, and graphics driver. On some WSL setups, Vulkan may run through `llvmpipe`, which is CPU software rendering instead of real GPU rendering. In that case, performance and visual stability may be different from a native GPU Vulkan setup.
+Frame Time (ms) was calculated as:
+
+Frame Time (ms) = 1000 / Typical FPS
+
+The `n log2(n)` column is included to compare the observed performance trend with the expected Barnes-Hut style scaling behavior.
+
+| Bodies (n) | Typical FPS | Frame Time (ms) | log2(n) | n * log2(n) |
+|---:|---:|---:|---:|---:|
+| 10,000 | 27.0 | 37.04 | 13.29 | 132,877 |
+| 20,000 | 21.0 | 47.62 | 14.29 | 285,754 |
+| 40,000 | 14.0 | 71.43 | 15.29 | 611,508 |
+| 80,000 | 7.0 | 142.86 | 16.29 | 1,303,017 |
+| 160,000 | 3.7 | 270.27 | 17.29 | 2,766,034 |
+| 320,000 | 2.3 | 434.78 | 18.29 | 5,852,068 |
+
+As the number of bodies increases, the FPS decreases and the frame time increases. Using doubled body counts helps show how the simulation scales as the problem size grows.
 
 For smoother testing, use a fixed window size and avoid resizing the window while the program is running.
 
