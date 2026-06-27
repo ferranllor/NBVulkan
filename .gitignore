@@ -1,5 +1,5 @@
-exec
-*.o
-shaders/slang.spv
-shaders/gas.spv
+bin/*
+obj/*
+shaders/*.spv
 imgui.ini
+imgui/*

@@ -42,7 +42,7 @@ typedef struct {
     real4array bodies;              // Arbre octal
     real3array force;               // Força dels nodes
     real3array vel;                 // Velocitat dels nodes
-    int nBodies;                    // Nº de cossos
+    uint32_t nBodies;                    // Nº de cossos
     real theta;                     // Valor per determinar si fem la aprox amb un centre de masses o no
     real dt;                        // Pas de temps
 } BHSim;
@@ -312,7 +312,7 @@ void sortBodies(BHSim* simulation)
     tmpF.y = (real*)malloc(simulation->nBodies * sizeof(real));
     tmpF.z = (real*)malloc(simulation->nBodies * sizeof(real));
 
-    for (int i = 0; i < simulation->nBodies; i++)
+    for (uint32_t i = 0; i < simulation->nBodies; i++)
     {
         mortonIndexes[i] = morton3D(simulation->bodies.x[i], simulation->bodies.y[i], simulation->bodies.z[i], -(simulation->octree->spaceSize), simulation->octree->spaceSize);
         indexes[i] = i;
@@ -320,7 +320,7 @@ void sortBodies(BHSim* simulation)
 
     quickSort_parallel(mortonIndexes, indexes, simulation->nBodies);
 
-    for (int i = 0; i < simulation->nBodies; i++)
+    for (uint32_t i = 0; i < simulation->nBodies; i++)
     {
         tmpB.x[i] = simulation->bodies.x[indexes[i]];
         tmpB.y[i] = simulation->bodies.y[indexes[i]];
@@ -472,7 +472,7 @@ void buildOctreeArray(BHSim* simulation)
     octree->nNodes = 1;
     octree->array[0] = (octreeNode){ simulation->bodies.x[0], simulation->bodies.y[0], simulation->bodies.z[0], simulation->bodies.w[0], { 0, 0, 0, 0, 0, 0, 0, 0 }, 9 };
 
-    for (int i = 1; i < octree->nBodies; i++)
+    for (uint32_t i = 1; i < (uint32_t)octree->nBodies; i++)
         insert(octree, (octreeNode) { simulation->bodies.x[i], simulation->bodies.y[i], simulation->bodies.z[i], simulation->bodies.w[i], { 0, 0, 0, 0, 0, 0, 0, 0 }, i + 9 }, 0, (real3) { 0, 0, 0 }, octree->spaceSize);
 
     propagateMass(octree);
@@ -616,7 +616,7 @@ void integrateOctreeArray(BHSim* simulation)
         unsigned int* __restrict IDsLevel = (unsigned int*)malloc(maxQueueSize * sizeof(unsigned int));
         unsigned int* __restrict posLevel = (unsigned int*)malloc(maxQueueSize * sizeof(unsigned int));
 
-        int i;
+        uint32_t i;
 
         #pragma omp for
         for (i = 0; i < simulation->nBodies; i++)
@@ -716,7 +716,6 @@ void randomizeBodies(real4array pos,
         y = (rand() / (float)RAND_MAX) * 2.0f - 1.0f;
         z = (rand() / (float)RAND_MAX) * 0.1f - 0.05f; // Flatten Z heavily for a disc appearance
 
-        real point[3] = { x, y, z };
         real len = sqrt(x*x + y*y); // Check 2D radius
         if (len > 1.0f || len == 0.0f) 
             continue;
