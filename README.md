@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-NBVulkan is a Vulkan-based real-time N-body simulation project that visualizes the movement of many particles under gravitational interaction. The simulation uses a Barnes-Hut style approach to handle large numbers of bodies more efficiently than a direct all-pairs calculation, making it suitable for testing and observing large particle systems.
+NBVulkan is a Vulkan-based real-time N-body simulation project that visualizes the movement of many particles under gravitational interaction. Additionally, the project integrates a grid-based gas simulation layer, allowing for the visualization of density fields and environmental interactions alongside the particle system.The simulation uses a Barnes-Hut style approach to handle large numbers of bodies more efficiently than a direct all-pairs calculation, making it suitable for testing and observing large particle systems.
 
 The project combines GPU rendering with interactive controls so that the simulation is not only computed and displayed, but also easier to explore visually. Users can zoom, rotate, tilt the view, pause the simulation, and adjust runtime behavior while the program is running.
 
