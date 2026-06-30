@@ -24,6 +24,10 @@ The following screenshots show the interactive controls, camera movement, zoom b
 
 ![Help Menu](assets/help_menu.png)
 
+A short demo video is also available:
+
+[Watch Demo Video](assets/demo.mp4)
+
 ---
 
 ## 2. Interactive Features and Runtime Controls
