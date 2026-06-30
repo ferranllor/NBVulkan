@@ -14,7 +14,9 @@ The following screenshots show the interactive controls, camera movement, zoom b
 
 ![Dear ImGui Control Panel](assets/imgui_control_panel.png)
 
-![Zoom Control](assets/imgui_zoom.png)
+![Zoom Control](assets/zoom_614.png)
+
+![Reset Zoom](assets/reset_zoom.png)
 
 ![Camera Rotation](assets/camera_rotation.png)
 
