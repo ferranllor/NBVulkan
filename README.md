@@ -8,6 +8,20 @@ The project combines GPU rendering with interactive controls so that the simulat
 
 A Dear ImGui control panel is integrated into the application to provide a simple graphical interface for common controls and runtime information. This makes the project easier to test, demonstrate, and extend in the future. The final system is designed as an interactive visualization tool where simulation, rendering, camera movement, and user interface work together as one complete application.
 
+## Demo Screenshots
+
+The following screenshots show the interactive controls, camera movement, zoom behavior, and Dear ImGui panel.
+
+![Dear ImGui Control Panel](assets/imgui_control_panel.png)
+
+![Zoom Control](assets/imgui_zoom.png)
+
+![Camera Rotation](assets/camera_rotation.png)
+
+![Camera Tilt](assets/camera_tilt.png)
+
+![Help Menu](assets/help_menu.png)
+
 ---
 
 ## 2. Interactive Features and Runtime Controls
