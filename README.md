@@ -105,7 +105,8 @@ This design keeps the interaction easy to integrate while still giving the user 
 
 ## 6. Build and Run
 
-To build and run the project:
+Before building the project, you will need to install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home).
+Once that is done, to build and run the project:
 
 ```bash
 cd NBVulkan
